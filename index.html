@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>店舗ポータル</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#2F5D46">
+<meta name="apple-mobile-web-app-title" content="店舗ポータル">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<style>
+  html, body { margin: 0; height: 100%; background: #F3F4EF; }
+  iframe { display: block; border: 0; width: 100%; height: 100%; }
+  .msg { font-family: sans-serif; font-size: 15px; line-height: 1.7; padding: 24px; color: #1D2621; }
+</style>
+</head>
+<body>
+<script>
+/*
+ * 店舗ポータルの入れ物(GitHub Pages に置く)。
+ * Apps Script のページを画面いっぱいの枠に入れて表示する(直接開くと出る Google の注意書きを出さないため)。
+ * 合言葉はこのファイルには書かない。URL の「#k=合言葉」で受け取り、この端末に覚えておく。
+ */
+var APP = 'https://script.google.com/macros/s/AKfycbxlpLZQIttk9kV2fuuJjprEmXTUb_rDkSFIdsBX521UdNms6yE6CbA6AJuB5sqeuSlfiw/exec';
+var VIEWS = { home: 'home', news: 'news', aki: '' };   // aki = 空き状況の表
+
+function readHash() {
+  var p = {};
+  location.hash.replace(/^#/, '').split('&').forEach(function(kv) {
+    var i = kv.indexOf('=');
+    if (i > 0) p[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+  });
+  return p;
+}
+function store(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+
+var frame = null;
+function show() {
+  var p = readHash();
+  var key = p.k || load('lotsPortalKey');
+  if (!key) {
+    document.body.innerHTML = '<div class="msg">このページは店舗ポータルのURL(合言葉付き)から開いてください。</div>';
+    return;
+  }
+  if (p.k) store('lotsPortalKey', p.k);
+  var view = VIEWS.hasOwnProperty(p.view) ? p.view : 'home';
+  var src = APP + '?k=' + encodeURIComponent(key) + (VIEWS[view] ? '&view=' + VIEWS[view] : '') + '&wrap=1';
+  if (!frame) {
+    document.body.innerHTML = '';
+    frame = document.createElement('iframe');
+    frame.title = '店舗ポータル';
+    document.body.appendChild(frame);
+  }
+  frame.src = src;
+}
+
+// 中のページからの「〇〇へ移動」を受け取る(Google のページからだけ)
+window.addEventListener('message', function(e) {
+  if (!/\.googleusercontent\.com$/.test(new URL(e.origin).hostname)) return;
+  var d = e.data || {};
+  if (d.type !== 'lots-portal-nav' || !VIEWS.hasOwnProperty(d.view)) return;
+  var p = readHash();
+  var key = p.k || load('lotsPortalKey');
+  location.hash = 'k=' + encodeURIComponent(key) + '&view=' + d.view;   // 戻るボタンでも戻れる
+});
+window.addEventListener('hashchange', show);
+show();
+</script>
+</body>
+</html>
