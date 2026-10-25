@@ -51,6 +51,7 @@ function show() {
     document.body.innerHTML = '';
     frame = document.createElement('iframe');
     frame.title = '店舗ポータル';
+    frame.allow = 'camera';   // 車両写真の「連続で撮る」(ページの中のカメラ)に必要
     document.body.appendChild(frame);
   }
   frame.src = src;
