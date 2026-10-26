@@ -23,7 +23,7 @@
  * 合言葉はこのファイルには書かない。URL の「#k=合言葉」で受け取り、この端末に覚えておく。
  */
 var APP = 'https://script.google.com/macros/s/AKfycbxlpLZQIttk9kV2fuuJjprEmXTUb_rDkSFIdsBX521UdNms6yE6CbA6AJuB5sqeuSlfiw/exec';
-var VIEWS = { home: 'home', news: 'news', photo: 'photo', aki: '' };   // aki = 空き状況の表、photo = 車両写真
+var VIEWS = { home: 'home', news: 'news', photo: 'photo', sns: 'sns', aki: '' };   // aki = 空き状況の表、photo = 車両写真、sns = SNS投稿用
 
 function readHash() {
   var p = {};
@@ -51,7 +51,7 @@ function show() {
     document.body.innerHTML = '';
     frame = document.createElement('iframe');
     frame.title = '店舗ポータル';
-    frame.allow = 'camera';   // 車両写真の「連続で撮る」(ページの中のカメラ)に必要
+    frame.allow = 'camera; clipboard-write; web-share';   // camera:車両写真/clipboard-write・web-share:SNS投稿用のコピー・画像の共有
     document.body.appendChild(frame);
   }
   frame.src = src;
