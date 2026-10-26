@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>車両写真 撮影</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#000000">
+<link rel="icon" href="icon.png">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", "Meiryo", sans-serif; overflow: hidden; }
+  .cam { position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; }
+  video { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; }
+  .top { position: absolute; top: 0; left: 0; right: 0; padding: calc(10px + env(safe-area-inset-top)) 14px 14px; font-size: 14px; line-height: 1.5;
+    background: linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,0)); white-space: pre-wrap; }
+  .top b { font-size: 16px; }
+  .err { color: #fca5a5; }
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px calc(18px + env(safe-area-inset-bottom)); background: #000; }
+  .bar button { font: inherit; border: 0; cursor: pointer; }
+  .side { width: 80px; height: 50px; border-radius: 10px; background: #374151; color: #fff; font-size: 15px; font-weight: 700; }
+  .side.on { background: #f59e0b; color: #000; }
+  .side.hide { visibility: hidden; }
+  .shut { width: 78px; height: 78px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 5px rgba(255,255,255,.35); }
+  .shut:active { transform: scale(.92); }
+  .shut:disabled { opacity: .3; }
+  .fl { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: #fff; opacity: 0; pointer-events: none; }
+  .last { position: absolute; left: 14px; bottom: calc(118px + env(safe-area-inset-bottom)); width: 64px; height: 64px; border-radius: 8px;
+    border: 2px solid #fff; object-fit: cover; display: none; background: #222; }
+  .cnt { position: absolute; left: 60px; bottom: calc(166px + env(safe-area-inset-bottom)); min-width: 24px; height: 24px; border-radius: 12px;
+    background: #2F5D46; color: #fff; font-size: 13px; font-weight: 700; text-align: center; line-height: 24px; padding: 0 6px; display: none; }
+  .wait { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,.8); display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; font-size: 16px; text-align: center; padding: 24px; }
+  .wait button { font: inherit; border: 0; border-radius: 10px; padding: 10px 18px; background: #374151; color: #fff; }
+  .msg { padding: 24px; font-size: 15px; line-height: 1.7; }
+  .msg a { color: #86efac; }
+</style>
+</head>
+<body>
+<script>
+/*
+ * 車両写真の連続撮影ページ(GitHub Pages に置く。入れ物の index.html と同じ場所)。
+ * Apps Script のページの中では Google の枠がカメラを止めるため、撮影だけこのページで行う。
+ * ポータルの写真画面「📷 連続で撮る」から開く。URL:camera.html#k=合言葉&unit=車両&date=yyyy-MM-dd&who=名前&row=行
+ * シャッターを押すたびに、写真(長辺1600px・JPEG)をドライブへ直接送る(送り先は Apps Script の photoPrepare)。
+ * 送れた写真は数枚ずつ登録する(photoCommit)。直接送れないときは Apps Script 経由(photoUploadBatch)に切り替える。
+ * 撮った写真はスマホのカメラロールには残らない。合言葉はこのファイルには書かない。
+ */
+var APP = 'https://script.google.com/macros/s/AKfycbxlpLZQIttk9kV2fuuJjprEmXTUb_rDkSFIdsBX521UdNms6yE6CbA6AJuB5sqeuSlfiw/exec';
+var MAX = 1600, Q = 0.7, PUT_MAX = 4, PREP_N = 8, COMMIT_N = 8;
+
+function readHash() {
+  var p = {};
+  location.hash.replace(/^#/, '').split('&').forEach(function(kv) {
+    var i = kv.indexOf('=');
+    if (i > 0) p[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1));
+  });
+  return p;
+}
+function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function errText(e) { return (e && e.message) || String(e); }
+
+var P = readHash();
+var KEY = P.k || load('lotsPortalKey') || '';
+var INFO = { unit: P.unit || '', date: P.date || '', who: P.who || '', row: P.row || '' };
+var BACK = './#k=' + encodeURIComponent(KEY) + '&view=photo';
+
+// ---- Apps Script との やりとり ----
+function api(res) {
+  return res.json().then(function(j) {
+    if (!j || !j.ok) throw new Error((j && j.error) || '読み込めませんでした');
+    return j.data;
+  });
+}
+function apiGet(params) {
+  var q = Object.keys(params).map(function(k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
+  return fetch(APP + '?' + q).then(api);
+}
+function apiPost(body) {
+  return fetch(APP, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) }).then(api);
+}
+
+if (!KEY || !INFO.unit || !/^\d{4}-\d{2}-\d{2}$/.test(INFO.date)) {
+  document.body.innerHTML = '<div class="msg">このページは店舗ポータルの「車両写真」→「📷 連続で撮る」から開いてください。<br><a href="' + BACK + '">店舗ポータルへ</a></div>';
+} else {
+  start();
+}
+
+function start() {
+  var cam = el('div', 'cam');
+  var video = el('video'); video.setAttribute('playsinline', ''); video.muted = true; video.autoplay = true;
+  var top = el('div', 'top');
+  var fl = el('div', 'fl');
+  var last = el('img', 'last'); last.alt = '';
+  var cnt = el('div', 'cnt');
+  var bar = el('div', 'bar');
+  var light = el('button', 'side hide', 'ライト'); light.type = 'button';
+  var shut = el('button', 'shut'); shut.type = 'button'; shut.setAttribute('aria-label', 'シャッター'); shut.disabled = true;
+  var fin = el('button', 'side', '完了'); fin.type = 'button';
+  [light, shut, fin].forEach(function(x) { bar.appendChild(x); });
+  var wait = el('div', 'wait');
+  var waitT = el('div');
+  var waitB = el('button', null, '撮影に戻る'); waitB.type = 'button';
+  wait.appendChild(waitT); wait.appendChild(waitB);
+  [video, top, fl, last, cnt, bar, wait].forEach(function(x) { cam.appendChild(x); });
+  document.body.appendChild(cam);
+
+  var stream = null, track = null, torch = false, camErr = '';
+  var shots = 0, okN = 0, ngN = 0, lastErr = '';
+  var ready = [], sess = [], done = [], rec = null;
+  var direct = true, preparing = false, committing = false, putting = 0, oldSending = 0, leaving = false;
+
+  // ---- 表示 ----
+  function pending() { return ready.length + putting + oldSending + done.length + (committing ? 1 : 0); }
+  function status() {
+    top.innerHTML = '';
+    top.appendChild(el('b', null, INFO.unit + ' ' + (INFO.who || '予約外')));
+    var sending = ready.length + putting + oldSending;
+    top.appendChild(document.createTextNode('\n撮影 ' + shots + '枚・保存済み ' + okN + '枚' + (sending ? '(送信中 ' + sending + '枚)' : '') +
+      (video.videoWidth ? '  ' + video.videoWidth + '×' + video.videoHeight : '')));
+    if (ngN) top.appendChild(el('div', 'err', '⚠ ' + ngN + '枚は保存できませんでした(' + lastErr + ')。撮り直してください。'));
+    if (camErr) top.appendChild(el('div', 'err', camErr));
+    if (leaving) {
+      if (!pending()) { location.href = BACK; return; }
+      waitT.textContent = '送信中です… あと ' + (ready.length + putting + oldSending) + '枚\n終わると自動で戻ります。';
+    }
+  }
+
+  // ---- カメラ ----
+  function openCamera() {
+    camErr = '';
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { camErr = 'このブラウザではカメラを使えません。'; status(); return; }
+    navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } } })
+      .then(function(st) {
+        stream = st; track = st.getVideoTracks()[0];
+        video.srcObject = st;
+        return video.play();
+      }).then(function() {
+        shut.disabled = false;
+        torch = false; light.classList.remove('on');
+        try {
+          var caps = track.getCapabilities ? track.getCapabilities() : {};
+          light.classList.toggle('hide', !(caps && caps.torch));
+        } catch (e) {}
+        status();
+      }).catch(function(e) {
+        camErr = 'カメラを使えませんでした(' + ((e && e.name) || errText(e)) + ')。Safariの設定でカメラを「確認」か「許可」にして、ページを開き直してください。';
+        status();
+      });
+  }
+  // 画面を閉じて戻ったときなど、カメラが止まっていたら起動し直す
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible' && (!track || track.readyState === 'ended')) openCamera();
+  });
+  light.addEventListener('click', function() {
+    if (!track) return;
+    var want = !torch;
+    track.applyConstraints({ advanced: [{ torch: want }] }).then(function() { torch = want; light.classList.toggle('on', torch); }, function() {});
+  });
+
+  // ---- 撮影 ----
+  shut.addEventListener('click', function() {
+    var w = video.videoWidth, h = video.videoHeight;
+    if (!w || !h) return;
+    var r = Math.min(1, MAX / Math.max(w, h));
+    var c = document.createElement('canvas');
+    c.width = Math.round(w * r); c.height = Math.round(h * r);
+    c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+    var t = document.createElement('canvas');
+    var r2 = 320 / Math.max(c.width, c.height);
+    t.width = Math.round(c.width * r2); t.height = Math.round(c.height * r2);
+    t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
+    var th = t.toDataURL('image/jpeg', 0.7);
+    fl.style.transition = 'none'; fl.style.opacity = '0.8';
+    setTimeout(function() { fl.style.transition = 'opacity .2s'; fl.style.opacity = '0'; }, 40);
+    last.src = th; last.style.display = 'block';
+    shots++;
+    cnt.textContent = shots; cnt.style.display = 'block';
+    c.toBlob(function(blob) {
+      c.width = c.height = 0;
+      if (blob) ready.push({ blob: blob, th: th.split(',')[1], at: Date.now() });
+      else { ngN++; lastErr = '撮影した写真を保存できませんでした'; }
+      tick();
+    }, 'image/jpeg', Q);
+    status();
+  });
+
+  // ---- 送る ----
+  // 送り先をもらう(数枚分まとめて)
+  function pumpPrepare() {
+    if (!direct || preparing) return;
+    var need = ready.length - sess.length;
+    if (need <= 0) return;
+    preparing = true;
+    apiGet({ api: 'photoPrepare', k: KEY, unit: INFO.unit, date: INFO.date, who: INFO.who, row: INFO.row,
+      n: Math.max(need, PREP_N), origin: location.origin }).then(function(r) {
+      rec = r.rec;
+      sess = sess.concat(r.sess || []);
+    }, function(e) {
+      if (/合言葉|開き直して|このページからは/.test(errText(e))) { ngN += ready.length; lastErr = errText(e); ready = []; return; }
+      direct = false; lastErr = errText(e);   // 送り先をもらえないときは Apps Script 経由へ
+    }).then(function() { preparing = false; tick(); });
+  }
+  // ドライブへ直接送る(4枚同時)
+  function pumpPut() {
+    while (direct && putting < PUT_MAX && ready.length && sess.length) {
+      (function(x, s) {
+        putting++;
+        fetch(s.url, { method: 'PUT', body: x.blob, headers: { 'Content-Type': 'image/jpeg' } }).then(function(res) {
+          if (!res.ok) throw new Error('送信できませんでした(' + res.status + ')');
+          return res.json();
+        }).then(function(j) {
+          if (!j || !j.id) throw new Error('送信できませんでした');
+          done.push({ id: j.id, name: s.name, at: x.at, th: x.th });
+          okN++;
+        }).catch(function(e) {
+          if (!okN) { direct = false; ready.unshift(x); sess = []; lastErr = errText(e); }   // 直接送れない環境
+          else if ((x.tries = (x.tries || 0) + 1) < 3) { ready.push(x); lastErr = errText(e); }   // 一時的な失敗はもう一度(2回まで)
+          else { ngN++; lastErr = errText(e); }
+        }).then(function() { putting--; tick(); });
+      })(ready.shift(), sess.shift());
+    }
+  }
+  // 登録(小さい画像と枚数。数枚ずつ)
+  function pumpCommit() {
+    if (committing || !done.length || !rec) return;
+    if (done.length < COMMIT_N && (ready.length || putting)) return;
+    committing = true;
+    var list = done.splice(0, done.length);
+    apiPost({ api: 'photoCommit', k: KEY, recId: rec.id, items: list }).catch(function() {
+      return apiPost({ api: 'photoCommit', k: KEY, recId: rec.id, items: list }).catch(function() {});   // 写真自体は保存済み
+    }).then(function() { committing = false; tick(); });
+  }
+  // 直接送れないとき:Apps Script 経由(4枚ずつ、2つ同時)
+  function toB64(blob) {
+    return new Promise(function(ok, ng) {
+      var fr = new FileReader();
+      fr.onload = function() { ok(String(fr.result).split(',')[1]); };
+      fr.onerror = function() { ng(new Error('写真を読み込めませんでした')); };
+      fr.readAsDataURL(blob);
+    });
+  }
+  function pumpOld() {
+    while (!direct && oldSending < 2 && ready.length) {
+      (function(list) {
+        oldSending++;
+        Promise.all(list.map(function(x) { return toB64(x.blob).then(function(b) { return { full: b, thumb: x.th }; }); }))
+          .then(function(items) { return apiPost({ api: 'photoUploadBatch', k: KEY, info: INFO, items: items }); })
+          .then(function(r) {
+            okN += r.photos.length;
+            if (r.failed) { ngN += r.failed; lastErr = '保存できない写真がありました'; }
+          }, function(e) { ngN += list.length; lastErr = errText(e); })
+          .then(function() { oldSending--; tick(); });
+      })(ready.splice(0, 4));
+    }
+  }
+  function tick() { pumpPrepare(); pumpPut(); pumpOld(); pumpCommit(); status(); }
+
+  // ---- 完了 ----
+  fin.addEventListener('click', function() {
+    leaving = true;
+    if (!pending()) { location.href = BACK; return; }
+    wait.style.display = 'flex';
+    status();
+  });
+  waitB.addEventListener('click', function() { leaving = false; wait.style.display = 'none'; status(); });
+  window.addEventListener('beforeunload', function(e) {
+    if (!leaving && pending()) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  status();
+  openCamera();
+}
+</script>
+</body>
+</html>
